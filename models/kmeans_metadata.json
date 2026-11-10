@@ -1,0 +1,36 @@
+{
+    "project": "FireWatch AI",
+    "algorithm": "Spark MLlib K-Means",
+    "k": 4,
+    "features": [
+        "latitude",
+        "longitude"
+    ],
+    "distance_measure": "Euclidean on geographic degrees",
+    "seed": 42,
+    "max_iterations": 20,
+    "total_records": 968740,
+    "silhouette_score": 0.6607248314778776,
+    "cluster_centers": [
+        {
+            "cluster": 0,
+            "latitude": -18.204771068680657,
+            "longitude": 142.44516152279692
+        },
+        {
+            "cluster": 1,
+            "latitude": -28.12209090522134,
+            "longitude": 118.71413368361179
+        },
+        {
+            "cluster": 2,
+            "latitude": -29.3596124582254,
+            "longitude": 148.03538776028847
+        },
+        {
+            "cluster": 3,
+            "latitude": -16.057561546467927,
+            "longitude": 131.45507733591626
+        }
+    ]
+}

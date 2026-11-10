@@ -1,0 +1,41 @@
+
+# Python environments
+.venv/
+.venv311/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Raw satellite datasets
+data/raw/*
+!data/raw/.gitkeep
+
+# Large processed dataset
+data/processed/*
+!data/processed/.gitkeep
+
+# Include small dashboard analytics
+!data/processed/analytics/
+data/processed/analytics/*
+!data/processed/analytics/*.parquet
+
+# Model metadata
+models/*
+!models/.gitkeep
+!models/kmeans_metadata.json
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
