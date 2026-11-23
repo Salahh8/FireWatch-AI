@@ -1,0 +1,7 @@
+-r requirements.txt
+pyspark==4.0.1
+matplotlib
+numpy
+scikit-learn
+jupyter
+ipykernel

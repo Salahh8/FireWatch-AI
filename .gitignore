@@ -49,3 +49,8 @@ src/test_spark_model_save.py
 Thumbs.db
 
 !data/processed/cleaned_sample.parquet
+
+# Additional local backups and experiments
+dashboard/app_before_final.py
+README_PREDICTION_UPDATE.txt
+src/diagnose_spark.py
