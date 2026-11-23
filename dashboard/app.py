@@ -45,6 +45,30 @@ hr {border-color:#293341!important;}
 .fire-brand {font-size:24px;font-weight:850;letter-spacing:-.04em;color:#F6F7FA;}
 .fire-brand span {color:#FF8A3D;}
 .fire-tag {display:inline-block;background:#34231C;color:#FFB27C;border:1px solid #68432C;border-radius:99px;padding:5px 12px;font-size:11px;font-weight:750;letter-spacing:.08em;}
+/* Improve form labels readability */
+[data-testid="stWidgetLabel"] *,
+[data-testid="stRadio"] label *,
+[data-testid="stSlider"] label *,
+[data-testid="stSelectbox"] label *,
+[data-testid="stToggle"] label * {
+    color: #E9EDF3 !important;
+}
+
+[data-testid="stCaptionContainer"] {
+    color: #A9B6C8 !important;
+}
+/* High contrast widget labels on the dark application shell. */
+[data-testid="stWidgetLabel"] p,
+[data-testid="stRadio"] p,
+[data-testid="stCheckbox"] p,
+[data-testid="stToggle"] p,
+[data-testid="stSlider"] p,
+[data-testid="stSelectbox"] p {
+    color: #E9EDF3 !important;
+    opacity: 1 !important;
+}
+/* The selectbox's dropdown is a light surface in some themes: keep its text readable. */
+[data-baseweb="select"] input { color: #F2F5F9; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -62,20 +86,28 @@ def read_metadata():
 
 @st.cache_data(show_spinner=False)
 def read_cleaned_sample(limit=2500):
-    path = ROOT / "data" / "processed" / "firewatch_cleaned_file.parquet"
-    if not path.is_file():
-        return pd.DataFrame()
-    import pyarrow.parquet as pq
-    parquet = pq.ParquetFile(path)
-    chunks = []
-    remaining = limit
-    for batch in parquet.iter_batches(batch_size=min(remaining, 2500)):
-        frame = batch.to_pandas()
-        chunks.append(frame.head(remaining))
-        remaining -= len(chunks[-1])
-        if remaining <= 0:
-            break
-    return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+    sample_path = (
+        ROOT / "data" / "processed" / "cleaned_sample.parquet"
+    )
+
+    full_path = (
+        ROOT / "data" / "processed"
+        / "firewatch_cleaned_file.parquet"
+    )
+
+    # Prefer the small deployment-ready sample.
+    if sample_path.is_file():
+        return pd.read_parquet(sample_path).head(limit)
+
+    # Local fallback when the full cleaned dataset exists.
+    if full_path.is_file():
+        import pyarrow.parquet as pq
+
+        parquet = pq.ParquetFile(full_path)
+        batch = next(parquet.iter_batches(batch_size=limit))
+        return batch.to_pandas().head(limit)
+
+    return pd.DataFrame()
 
 try:
     monthly = read_parquet("monthly_statistics.parquet").sort_values("month").copy()
@@ -162,30 +194,132 @@ def cluster_fig():
     return theme(fig, 385, "Detection counts by geographic cluster")
 
 
-def map_fig(grid, show_centers=True, map_style="carto-darkmatter"):
-    fig = px.scatter_map(grid, lat="latitude", lon="longitude", size="detections", color="avg_frp",
-                         size_max=22, zoom=3, center={"lat":-25.5,"lon":134.5},
-                         map_style=map_style,
-                         color_continuous_scale=["#FFE0A0", "#FF8A3D", "#E23A3A"],
-                         hover_data={"detections":":,", "avg_frp":":.2f", "max_frp":":.2f",
-                                     "latitude":False,"longitude":False,"lat_grid":True,"lon_grid":True},
-                         labels={"avg_frp":"Avg FRP (MW)"})
-    fig.update_traces(marker=dict(opacity=.80), selector=dict(type="scattermap"))
+# Satellite view uses MapLibre/WebGL; the 2D map below is an SVG-based,
+# webgl-independent fallback that intentionally does NOT imply a real satellite basemap.
+INTERACTIVE_STYLES = ["satellite", "satellite-streets", "carto-darkmatter", "open-street-map"]
+FIRE_SCALE = ["#FFE4A0", "#FFBD63", "#FF8234", "#D83630"]
+SCORE_SCALE = ["#376F99", "#F0CF86", "#FA9D4D", "#E34237"]
+SEA_COLOR = "#103B55"
+LAND_COLOR = "#B98D60"
+
+
+def style_2d_geo(fig, height=590, score=False):
+    """Plotly Geo uses SVG; this rendering does not need WebGL2."""
+    if map_extent == "Mainland & Tasmania":
+        # Enlarged Australian mainland/Tasmania viewport. Some offshore
+        # territories, e.g. Macquarie Island, lie outside this crop.
+        lon_range, lat_range = [110, 155], [-46, -9]
+    else:
+        lon_range, lat_range = [108, 165], [-57, -8]
+
+    fig.update_geos(
+        projection_type="mercator",
+        showland=True, landcolor=LAND_COLOR,
+        showocean=True, oceancolor=SEA_COLOR,
+        showlakes=True, lakecolor="#276784",
+        showrivers=True, rivercolor="#39788E",
+        showcoastlines=True, coastlinecolor="#F1D0A0",
+        coastlinewidth=1.1,
+        showcountries=True, countrycolor="#947550", countrywidth=0.6,
+        lonaxis_range=lon_range,
+        lataxis_range=lat_range,
+        bgcolor=SEA_COLOR,
+        showframe=False,
+        resolution=50,
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=PANEL,
+        font=dict(color=TEXT, family="Arial"),
+        margin=dict(l=5, r=5, t=8, b=8),
+        height=height,
+        coloraxis_colorbar=dict(
+            title="Score (%)" if score else "Avg FRP (MW)",
+            thickness=13, len=0.82, tickfont=dict(color=MUTED),
+        ),
+        legend=dict(bgcolor="rgba(16,29,39,.85)", x=0.01, y=0.02),
+        geo=dict(domain=dict(x=[0, 0.97], y=[0, 1])),
+    )
+    return fig
+
+
+def map_fig(grid, show_centers=True, map_style="satellite"):
+    """Show spatial analysis using a safe 2D map or MapLibre satellite map."""
+    hover = {
+        "detections": ":,",
+        "avg_frp": ":.2f",
+        "max_frp": ":.2f",
+        "lat_grid": True,
+        "lon_grid": True,
+        "latitude": False,
+        "longitude": False,
+    }
+    labels = {"avg_frp": "Average FRP (MW)"}
+    if use_2d_maps:
+        fig = px.scatter_geo(
+            grid, lat="latitude", lon="longitude", size="detections",
+            color="avg_frp", size_max=20,
+            color_continuous_scale=FIRE_SCALE,
+            hover_data=hover, labels=labels,
+        )
+        fig.update_traces(
+            marker=dict(opacity=0.88, line=dict(color="#553723", width=0.45)),
+            selector=dict(type="scattergeo"),
+        )
+        if show_centers:
+            centers = metadata.get("cluster_centers", [])
+            if centers:
+                fig.add_trace(go.Scattergeo(
+                    lat=[c["latitude"] for c in centers],
+                    lon=[c["longitude"] for c in centers],
+                    mode="markers+text",
+                    text=[f"C{c['cluster']}" for c in centers],
+                    textposition="top center",
+                    textfont=dict(color="#F4FFFF", size=12),
+                    marker=dict(size=13, color="#27D9E5", line=dict(width=1, color="#061B26")),
+                    name="K-Means centers",
+                    hovertext=[
+                        f"Cluster {c['cluster']}<br>Lat: {c['latitude']:.4f}<br>Lon: {c['longitude']:.4f}"
+                        for c in centers
+                    ],
+                    hoverinfo="text",
+                ))
+        return style_2d_geo(fig, height=580)
+
+    fig = px.scatter_map(
+        grid, lat="latitude", lon="longitude", size="detections",
+        color="avg_frp", size_max=22, zoom=3.15,
+        center={"lat": -25.5, "lon": 134.5},
+        map_style=map_style,
+        color_continuous_scale=FIRE_SCALE,
+        hover_data=hover, labels=labels,
+    )
+    fig.update_traces(marker=dict(opacity=0.86), selector=dict(type="scattermap"))
     if show_centers:
         centers = metadata.get("cluster_centers", [])
         if centers:
             fig.add_trace(go.Scattermap(
-                lat=[c["latitude"] for c in centers], lon=[c["longitude"] for c in centers],
-                mode="markers+text", text=[f"C{c['cluster']}" for c in centers],
-                textposition="top center", textfont=dict(color="#FFFFFF", size=14),
-                marker=dict(size=19, color="#35D6E8", opacity=1),
-                name="K-Means centers", hovertext=[f"Cluster {c['cluster']}<br>Lat: {c['latitude']:.4f}<br>Lon: {c['longitude']:.4f}" for c in centers],
-                hoverinfo="text"))
-    fig.update_layout(template="plotly_dark", paper_bgcolor=PANEL, font=dict(color=TEXT),
-                      height=610, margin=dict(l=0,r=0,t=0,b=0),
-                      coloraxis_colorbar=dict(title="Avg FRP", tickfont=dict(color=MUTED)),
-                      legend=dict(bgcolor="rgba(20,27,38,.85)", x=.01, y=.01),
-                      map=dict(bearing=0, pitch=0))
+                lat=[c["latitude"] for c in centers],
+                lon=[c["longitude"] for c in centers],
+                mode="markers+text",
+                text=[f"C{c['cluster']}" for c in centers],
+                textposition="top center",
+                textfont=dict(color="#FFFFFF", size=14),
+                marker=dict(size=19, color="#27D9E5", opacity=1),
+                name="K-Means centers",
+                hovertext=[
+                    f"Cluster {c['cluster']}<br>Lat: {c['latitude']:.4f}<br>Lon: {c['longitude']:.4f}"
+                    for c in centers
+                ],
+                hoverinfo="text",
+            ))
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=PANEL, font=dict(color=TEXT),
+        height=580, margin=dict(l=0, r=0, t=0, b=0),
+        coloraxis_colorbar=dict(title="Avg FRP (MW)", tickfont=dict(color=MUTED)),
+        legend=dict(bgcolor="rgba(20,27,38,.85)", x=.01, y=.01),
+        map=dict(bearing=0, pitch=0),
+    )
     return fig
 
 with st.sidebar:
@@ -194,6 +328,21 @@ with st.sidebar:
     st.markdown('<span class="fire-tag">● AUSTRALIA · 2024</span>', unsafe_allow_html=True)
     st.divider()
     page = st.radio("NAVIGATION", ["🏠 Overview", "📈 Temporal Analytics", "🗺️ Geographic Intelligence", "🧠 ML Intelligence", "🔥 Hotspot Prediction", "🗃️ Data Explorer"], label_visibility="collapsed")
+    use_2d_maps = st.toggle(
+        "2D Compatibility Maps",
+        value=True,
+        help="SVG-based map for devices without WebGL2. Disable for interactive satellite imagery."
+    )
+    map_extent = "Mainland & Tasmania"
+    if use_2d_maps:
+        map_extent = st.selectbox(
+            "2D map coverage",
+            ["Mainland & Tasmania", "All Australian territories"],
+            index=0,
+            help="The wider view also includes remote Australian island cells."
+        )
+    else:
+        st.caption("Satellite basemaps need WebGL2 and internet access.")
     st.divider()
     st.caption("DATA SOURCE  ·  NASA FIRMS VIIRS S-NPP")
     st.caption("ENGINE  ·  APACHE SPARK + MLLIB")
@@ -210,7 +359,7 @@ if page == "🏠 Overview":
     st.markdown("### 🗺️ Detection hotspot map")
     top_grid = hotspots[hotspots["detections"] >= hotspots["detections"].quantile(.35)]
     plot(map_fig(top_grid, True))
-    st.caption("Circle size = number of detections per 1° grid cell · Color = average FRP · Cyan markers = K-Means geographic centers")
+    st.caption("Circle size = detections per 1° cell · Color = mean FRP (MW) · Cyan = K-Means centers. 2D mode uses stylized terrain colors, not satellite imagery.")
     left,right = st.columns(2)
     with left: plot(monthly_fig())
     with right: plot(frp_fig())
@@ -251,7 +400,11 @@ elif page == "🗺️ Geographic Intelligence":
     with b:
         centers = st.checkbox("Show K-Means centers", value=True)
     with c:
-        map_style = st.selectbox("Basemap", ["carto-darkmatter", "open-street-map"], index=0)
+        map_style = st.selectbox(
+            "Interactive basemap", INTERACTIVE_STYLES, index=0,
+            disabled=use_2d_maps,
+            help="Available when 2D Compatibility Maps is switched off."
+        )
     grid = hotspots[hotspots["detections"] >= minimum].copy()
     if grid.empty:
         st.warning("No grid cells match the current filter.")
@@ -261,7 +414,7 @@ elif page == "🗺️ Geographic Intelligence":
         y.metric("DETECTIONS IN VISIBLE CELLS", f"{int(grid['detections'].sum()):,}")
         z.metric("MAX CELL DETECTIONS", f"{int(grid['detections'].max()):,}")
         plot(map_fig(grid, centers, map_style))
-        st.caption("Grid cells are 1° latitude × 1° longitude. Geographic centers are cluster centroids, not actual wildfire locations. Filtering cells does not retrain the model.")
+        st.caption("1° × 1° geographic cells; cluster centers are model centroids, not exact fire locations. The 2D map is stylized; satellite imagery requires interactive mode. Filters do not retrain the model.")
         st.markdown("### Highest-detection grid cells")
         st.dataframe(grid.sort_values("detections", ascending=False).head(20)[["lat_grid", "lon_grid", "detections", "avg_frp", "max_frp"]], width="stretch", hide_index=True)
 
@@ -419,8 +572,9 @@ elif page == "🔥 Hotspot Prediction":
         threshold = st.slider("Minimum model score (%)", 0, 100, 0, 5, key="prediction_score_threshold")
     with style_col:
         prediction_map_style = st.selectbox(
-            "Basemap", ["carto-darkmatter", "open-street-map"],
-            key="prediction_map_style"
+            "Interactive basemap", INTERACTIVE_STYLES,
+            index=0, key="prediction_map_style", disabled=use_2d_maps,
+            help="Available when 2D Compatibility Maps is switched off."
         )
     visible = forecast.loc[forecast["probability_pct"] >= threshold].copy()
     st.caption(
@@ -430,31 +584,45 @@ elif page == "🔥 Hotspot Prediction":
     if visible.empty:
         st.info("No cells satisfy the selected score threshold.")
     else:
-        prediction_map = px.scatter_map(
-            visible,
-            lat="latitude", lon="longitude", color="probability_pct",
-            color_continuous_scale=["#356A92", "#FFCC74", "#FF8A3D", "#FF514F"],
-            range_color=[0, 100],
-            hover_name="cell_label",
-            hover_data={
-                "probability_pct": ":.1f",
-                "previous_1_month_detections": ":,.0f",
-                "previous_2_month_detections": ":,.0f",
-                "previous_3_month_detections": ":,.0f",
-                "latitude": False, "longitude": False,
-            },
-            labels={"probability_pct": "Model score (%)"},
-            zoom=3,
-            center={"lat": -25.5, "lon": 134.5},
-            map_style=prediction_map_style,
-        )
-        prediction_map.update_traces(marker=dict(size=10, opacity=.85))
-        prediction_map.update_layout(
-            template="plotly_dark", paper_bgcolor=PANEL,
-            font=dict(color=TEXT), height=580,
-            margin=dict(l=0, r=0, t=0, b=0),
-            coloraxis_colorbar=dict(title="Score (%)", tickfont=dict(color=MUTED)),
-        )
+        score_hover = {
+            "probability_pct": ":.1f",
+            "previous_1_month_detections": ":,.0f",
+            "previous_2_month_detections": ":,.0f",
+            "previous_3_month_detections": ":,.0f",
+            "latitude": False,
+            "longitude": False,
+        }
+        if use_2d_maps:
+            prediction_map = px.scatter_geo(
+                visible, lat="latitude", lon="longitude",
+                color="probability_pct", color_continuous_scale=SCORE_SCALE,
+                range_color=[0, 100], hover_name="cell_label",
+                hover_data=score_hover,
+                labels={"probability_pct": "Model score (%)"},
+            )
+            prediction_map.update_traces(
+                marker=dict(size=8.5, opacity=.92,
+                            line=dict(width=.4, color="#4C311F")),
+                selector=dict(type="scattergeo"),
+            )
+            style_2d_geo(prediction_map, height=580, score=True)
+        else:
+            prediction_map = px.scatter_map(
+                visible, lat="latitude", lon="longitude",
+                color="probability_pct", color_continuous_scale=SCORE_SCALE,
+                range_color=[0, 100], hover_name="cell_label",
+                hover_data=score_hover,
+                labels={"probability_pct": "Model score (%)"},
+                zoom=3.15, center={"lat": -25.5, "lon": 134.5},
+                map_style=prediction_map_style,
+            )
+            prediction_map.update_traces(marker=dict(size=10, opacity=.87))
+            prediction_map.update_layout(
+                template="plotly_dark", paper_bgcolor=PANEL,
+                font=dict(color=TEXT), height=580,
+                margin=dict(l=0, r=0, t=0, b=0),
+                coloraxis_colorbar=dict(title="Score (%)", tickfont=dict(color=MUTED)),
+            )
         plot(prediction_map)
 
     st.markdown("### 📍 Inspect a geographic grid cell")
@@ -551,7 +719,7 @@ else:
         if st.button("Load sample of cleaned detections"):
             sample = read_cleaned_sample()
             if sample.empty:
-                st.warning("Cleaned Parquet file was not found.")
+                st.warning("Cleaned preview not found. Add data/processed/cleaned_sample.parquet to the deployed repository.")
             else:
                 st.dataframe(sample, width="stretch", hide_index=True)
                 st.caption("Preview only; not a random sample and not the full dataset.")

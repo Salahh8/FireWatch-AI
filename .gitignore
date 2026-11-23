@@ -47,3 +47,5 @@ src/test_spark_model_save.py
 *.tmp
 .DS_Store
 Thumbs.db
+
+!data/processed/cleaned_sample.parquet
