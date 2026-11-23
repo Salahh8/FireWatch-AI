@@ -1,0 +1,48 @@
+{
+    "model": "Spark MLlib Random Forest",
+    "training_months": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+    ],
+    "validation_months": [
+        10
+    ],
+    "testing_months": [
+        11,
+        12
+    ],
+    "features": [
+        "lat_grid",
+        "lon_grid",
+        "month",
+        "lag_1",
+        "lag_2",
+        "lag_3"
+    ],
+    "validation": {
+        "accuracy": 0.8187,
+        "weighted_precision": 0.8319,
+        "weighted_recall": 0.8187,
+        "weighted_f1": 0.8199,
+        "roc_auc": 0.8949
+    },
+    "test": {
+        "accuracy": 0.8139,
+        "weighted_precision": 0.8139,
+        "weighted_recall": 0.8139,
+        "weighted_f1": 0.8136,
+        "roc_auc": 0.8767
+    },
+    "feature_importance": {
+        "lat_grid": 0.102755,
+        "lon_grid": 0.073098,
+        "month": 0.032195,
+        "lag_1": 0.467898,
+        "lag_2": 0.212865,
+        "lag_3": 0.111189
+    }
+}

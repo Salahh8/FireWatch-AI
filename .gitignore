@@ -1,5 +1,4 @@
-
-# Python environments
+﻿# Python
 .venv/
 .venv311/
 venv/
@@ -13,28 +12,37 @@ __pycache__/
 # Jupyter
 .ipynb_checkpoints/
 
-# Raw satellite datasets
+# Raw datasets
 data/raw/*
 !data/raw/.gitkeep
 
-# Large processed dataset
+# Processed data
 data/processed/*
 !data/processed/.gitkeep
 
-# Include small dashboard analytics
+# Dashboard analytics
 !data/processed/analytics/
 data/processed/analytics/*
 !data/processed/analytics/*.parquet
 
-# Model metadata
+# Prediction dashboard outputs
+!data/processed/geographic_predictions_2024_test.parquet
+!data/processed/geographic_predictions_2025_01.parquet
+
+# Models
 models/*
 !models/.gitkeep
 !models/kmeans_metadata.json
+!models/geographic_rf_metrics.json
 
-# Streamlit secrets
+# Local backups and experiments
+*.bak
+dashboard/app_backup_before_prediction.py
+src/test_rf_tree_export.py
+src/test_spark_model_save.py
+
+# Secrets and temporary files
 .streamlit/secrets.toml
-
-# Temporary files
 *.log
 *.tmp
 .DS_Store

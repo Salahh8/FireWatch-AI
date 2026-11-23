@@ -122,7 +122,7 @@ def header(section, title, description):
 
 
 def plot(fig):
-    st.plotly_chart(fig, use_container_width=True, config={"displaylogo": False})
+    st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
 
 def monthly_fig():
@@ -193,7 +193,7 @@ with st.sidebar:
     st.caption("SATELLITE INTELLIGENCE PLATFORM")
     st.markdown('<span class="fire-tag">● AUSTRALIA · 2024</span>', unsafe_allow_html=True)
     st.divider()
-    page = st.radio("NAVIGATION", ["🏠 Overview", "📈 Temporal Analytics", "🗺️ Geographic Intelligence", "🧠 ML Intelligence", "🗃️ Data Explorer"], label_visibility="collapsed")
+    page = st.radio("NAVIGATION", ["🏠 Overview", "📈 Temporal Analytics", "🗺️ Geographic Intelligence", "🧠 ML Intelligence", "🔥 Hotspot Prediction", "🗃️ Data Explorer"], label_visibility="collapsed")
     st.divider()
     st.caption("DATA SOURCE  ·  NASA FIRMS VIIRS S-NPP")
     st.caption("ENGINE  ·  APACHE SPARK + MLLIB")
@@ -233,15 +233,15 @@ elif page == "📈 Temporal Analytics":
         st.markdown('<div class="fire-panel"><strong>Low</strong><p>FRP below 10 MW</p><br><strong>Moderate</strong><p>FRP from 10 MW to below 50 MW</p><br><strong>High</strong><p>FRP of 50 MW or above</p></div>', unsafe_allow_html=True)
         st.caption("These bands were defined for this project; they are not official wildfire severity classes.")
     st.markdown("### Monthly summary")
-    st.dataframe(monthly, use_container_width=True, hide_index=True)
+    st.dataframe(monthly, width="stretch", hide_index=True)
     st.markdown("### Observation breakdowns")
     left,right = st.columns(2)
     with left:
         st.markdown("**Day / Night**")
-        st.dataframe(daynight, use_container_width=True, hide_index=True)
+        st.dataframe(daynight, width="stretch", hide_index=True)
     with right:
         st.markdown("**Satellite confidence categories**")
-        st.dataframe(confidence, use_container_width=True, hide_index=True)
+        st.dataframe(confidence, width="stretch", hide_index=True)
 
 elif page == "🗺️ Geographic Intelligence":
     header("Analytics / Geographic", "Explore Australia's hotspots.", "Interactive spatial aggregation of historical VIIRS thermal detections.")
@@ -263,7 +263,7 @@ elif page == "🗺️ Geographic Intelligence":
         plot(map_fig(grid, centers, map_style))
         st.caption("Grid cells are 1° latitude × 1° longitude. Geographic centers are cluster centroids, not actual wildfire locations. Filtering cells does not retrain the model.")
         st.markdown("### Highest-detection grid cells")
-        st.dataframe(grid.sort_values("detections", ascending=False).head(20)[["lat_grid", "lon_grid", "detections", "avg_frp", "max_frp"]], use_container_width=True, hide_index=True)
+        st.dataframe(grid.sort_values("detections", ascending=False).head(20)[["lat_grid", "lon_grid", "detections", "avg_frp", "max_frp"]], width="stretch", hide_index=True)
 
 elif page == "🧠 ML Intelligence":
     header("Machine Learning / Spark MLlib", "Geographic clustering intelligence.", "K-Means clustering of latitude and longitude across the cleaned satellite detections.")
@@ -278,11 +278,258 @@ elif page == "🧠 ML Intelligence":
         plot(map_fig(hotspots[hotspots["detections"] >= hotspots["detections"].quantile(.55)], True))
     with right:
         st.markdown("### Cluster statistics")
-        st.dataframe(clusters[["cluster", "detections", "center_lat", "center_lon", "avg_frp"]], use_container_width=True, hide_index=True)
+        st.dataframe(clusters[["cluster", "detections", "center_lat", "center_lon", "avg_frp"]], width="stretch", hide_index=True)
         st.markdown('<div class="fire-panel"><strong>Model interpretation</strong><p>K-Means identifies broad geographic groups of detections. It does not predict future fires or classify confirmed wildfire events.</p></div>', unsafe_allow_html=True)
         st.caption("Distance metric: Euclidean distance on latitude/longitude degrees (baseline; not geodesic distance).")
     with st.expander("View model metadata"):
         st.json(metadata)
+
+elif page == "🔥 Hotspot Prediction":
+    from datetime import date
+
+    header(
+        "Machine Learning / Geographic Prediction",
+        "Explore geographic thermal-detection scores.",
+        "Spark MLlib Random Forest · 1° Australia grid · Historical test and experimental scenario"
+    )
+    metrics_path = ROOT / "models" / "geographic_rf_metrics.json"
+    test_path = ROOT / "data" / "processed" / "geographic_predictions_2024_test.parquet"
+    jan_path = ROOT / "data" / "processed" / "geographic_predictions_2025_01.parquet"
+
+    @st.cache_data(show_spinner=False)
+    def load_prediction_data(path):
+        return pd.read_parquet(path)
+
+    st.markdown("### Choose prediction mode")
+    view_mode = st.radio(
+        "Prediction mode",
+        ["2024 held-out test (Nov–Dec)", "January 2025 experimental scenario"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="prediction_view_mode"
+    )
+    test_mode = view_mode.startswith("2024")
+    data_path = test_path if test_mode else jan_path
+    if not data_path.is_file():
+        st.warning(f"Prediction export is missing: {data_path.name}")
+        st.code("python src/12_generate_geographic_predictions.py", language="powershell")
+        st.info("Generate the small offline prediction files first, then refresh the page. The dashboard does not train Spark models.")
+        st.stop()
+
+    try:
+        source_forecast = load_prediction_data(str(data_path)).copy()
+    except Exception as exc:
+        st.error(f"Cannot open prediction data: {exc}")
+        st.stop()
+
+    required = {
+        "lat_grid", "lon_grid", "month", "forecast_year", "prediction",
+        "probability_detection", "probability_no_detection",
+        "previous_1_month_detections", "previous_2_month_detections",
+        "previous_3_month_detections", "actual_detection", "actual_detections"
+    }
+    missing = required - set(source_forecast.columns)
+    if missing:
+        st.error(f"Missing forecast columns: {sorted(missing)}")
+        st.stop()
+    not_nullable = sorted(required - {"actual_detection", "actual_detections"})
+    if source_forecast.empty or source_forecast[not_nullable].isna().any().any():
+        st.error("Forecast file is empty or has missing required inputs or outputs.")
+        st.stop()
+    if source_forecast[["lat_grid", "lon_grid", "month", "forecast_year"]].duplicated().any():
+        st.error("Duplicate grid/month combinations in prediction data.")
+        st.stop()
+    if (not source_forecast["probability_detection"].between(0, 1).all()
+            or not source_forecast["probability_no_detection"].between(0, 1).all()):
+        st.error("Prediction scores must be between 0 and 1.")
+        st.stop()
+    if not source_forecast["prediction"].isin([0, 1]).all():
+        st.error("Unexpected predicted classes.")
+        st.stop()
+
+    if test_mode:
+        if not ((source_forecast["forecast_year"] == 2024)
+                & source_forecast["month"].isin([11, 12])).all():
+            st.error("Expected November/December 2024 held-out predictions.")
+            st.stop()
+        if source_forecast["actual_detection"].isna().any():
+            st.error("Held-out test file is missing true labels.")
+            st.stop()
+        st.success(
+            "Held-out historical test: 2024 observations were used to check model predictions. "
+            "Results show satellite thermal detections, not confirmed fires."
+        )
+        month_to_show = st.selectbox(
+            "Test month", [11, 12],
+            format_func=lambda m: f"{MONTHS[m]} 2024",
+            key="prediction_test_month"
+        )
+        forecast = source_forecast[source_forecast["month"] == month_to_show].copy()
+        selected_year, selected_month = 2024, month_to_show
+        overall_y = source_forecast["actual_detection"].astype(int)
+        overall_rf = source_forecast["prediction"].astype(int)
+        overall_baseline = (source_forecast["previous_1_month_detections"] > 0).astype(int)
+        full_rf_accuracy = float((overall_y == overall_rf).mean())
+        full_baseline_accuracy = float((overall_y == overall_baseline).mean())
+        st.caption(
+            f"Complete Nov–Dec holdout: Random Forest accuracy {full_rf_accuracy:.2%} "
+            f"vs persistence baseline {full_baseline_accuracy:.2%}; "
+            "the model was fitted on Apr–Sep 2024 and evaluated chronologically."
+        )
+    else:
+        if not ((source_forecast["forecast_year"] == 2025)
+                & (source_forecast["month"] == 1)).all():
+            st.error("Expected January 2025 experimental scenario.")
+            st.stop()
+        forecast = source_forecast.copy()
+        selected_year, selected_month = 2025, 1
+        st.warning(
+            "Unverified retrospective scenario, NOT a current or live fire forecast. "
+            "The model used October–December 2024 detection history to score January 2025. "
+            "January is outside the training target months (Apr–Sep 2024), "
+            "and actual January 2025 outcomes were not collected or checked here. "
+            "Scores are uncalibrated model outputs, not validated real-world fire probabilities."
+        )
+
+    if len(forecast) != 822 or forecast[["lat_grid", "lon_grid"]].duplicated().any():
+        st.error(f"Expected exactly 822 unique geographic cells for this period, got {len(forecast)}.")
+        st.stop()
+
+    forecast["latitude"] = forecast["lat_grid"] + .5
+    forecast["longitude"] = forecast["lon_grid"] + .5
+    forecast["probability_pct"] = forecast["probability_detection"] * 100
+    forecast["cell_label"] = forecast.apply(
+        lambda r: f"Grid ({int(r['lat_grid'])}, {int(r['lon_grid'])})", axis=1
+    )
+
+    a, b, c, d = st.columns(4)
+    a.metric("GEOGRAPHIC GRID CELLS", f"{len(forecast):,}")
+    b.metric("PREDICTED DETECTION", f"{int((forecast['prediction'] == 1).sum()):,}")
+    if test_mode:
+        c.metric("OBSERVED DETECTION", f"{int((forecast['actual_detection'] == 1).sum()):,}")
+        month_acc = (forecast["prediction"].astype(int) == forecast["actual_detection"].astype(int)).mean()
+        d.metric("SELECTED MONTH ACCURACY", f"{month_acc:.2%}")
+    else:
+        c.metric("PREDICTED NO DETECTION", f"{int((forecast['prediction'] == 0).sum()):,}")
+        d.metric("MEAN MODEL SCORE", f"{forecast['probability_detection'].mean():.1%}")
+
+    st.markdown("### 🗺️ Geographic model-score map")
+    filter_col, style_col = st.columns([2, 1])
+    with filter_col:
+        threshold = st.slider("Minimum model score (%)", 0, 100, 0, 5, key="prediction_score_threshold")
+    with style_col:
+        prediction_map_style = st.selectbox(
+            "Basemap", ["carto-darkmatter", "open-street-map"],
+            key="prediction_map_style"
+        )
+    visible = forecast.loc[forecast["probability_pct"] >= threshold].copy()
+    st.caption(
+        f"Showing {len(visible):,} of {len(forecast):,} cells · "
+        "Markers are grid-cell centers, not fire locations · Marker color = model score"
+    )
+    if visible.empty:
+        st.info("No cells satisfy the selected score threshold.")
+    else:
+        prediction_map = px.scatter_map(
+            visible,
+            lat="latitude", lon="longitude", color="probability_pct",
+            color_continuous_scale=["#356A92", "#FFCC74", "#FF8A3D", "#FF514F"],
+            range_color=[0, 100],
+            hover_name="cell_label",
+            hover_data={
+                "probability_pct": ":.1f",
+                "previous_1_month_detections": ":,.0f",
+                "previous_2_month_detections": ":,.0f",
+                "previous_3_month_detections": ":,.0f",
+                "latitude": False, "longitude": False,
+            },
+            labels={"probability_pct": "Model score (%)"},
+            zoom=3,
+            center={"lat": -25.5, "lon": 134.5},
+            map_style=prediction_map_style,
+        )
+        prediction_map.update_traces(marker=dict(size=10, opacity=.85))
+        prediction_map.update_layout(
+            template="plotly_dark", paper_bgcolor=PANEL,
+            font=dict(color=TEXT), height=580,
+            margin=dict(l=0, r=0, t=0, b=0),
+            coloraxis_colorbar=dict(title="Score (%)", tickfont=dict(color=MUTED)),
+        )
+        plot(prediction_map)
+
+    st.markdown("### 📍 Inspect a geographic grid cell")
+    selected_cell = st.selectbox(
+        "Choose a geographic grid cell",
+        options=forecast.sort_values(["lat_grid", "lon_grid"])["cell_label"].tolist(),
+        index=0,
+        key="prediction_selected_cell",
+    )
+    chosen = forecast.loc[forecast["cell_label"] == selected_cell].iloc[0]
+    left, right = st.columns([1, 1.4])
+    with left:
+        st.metric("MODEL DETECTION SCORE", f"{chosen['probability_detection']:.1%}")
+        st.metric("PREDICTED CLASS", "Detection" if int(chosen["prediction"]) else "No detection")
+        if test_mode:
+            observed_text = "Detection" if int(chosen["actual_detection"]) else "No detection"
+            st.metric("OBSERVED CLASS", observed_text)
+            st.caption(f"Actual detected records in month: {int(chosen['actual_detections']):,}")
+        st.caption(
+            f"Grid bounds: {int(chosen['lat_grid'])}° to {int(chosen['lat_grid']) + 1}° latitude; "
+            f"{int(chosen['lon_grid'])}° to {int(chosen['lon_grid']) + 1}° longitude"
+        )
+
+    def historical_label(months_before):
+        # Convert a 1-based year/month to an offset without extra dependencies.
+        index = selected_year * 12 + (selected_month - 1) - months_before
+        year, month_zero = divmod(index, 12)
+        return date(year, month_zero + 1, 1).strftime("%b %Y")
+
+    with right:
+        history = pd.DataFrame({
+            "Month": [historical_label(3), historical_label(2), historical_label(1)],
+            "Detections": [
+                int(chosen["previous_3_month_detections"]),
+                int(chosen["previous_2_month_detections"]),
+                int(chosen["previous_1_month_detections"]),
+            ],
+        })
+        hist_fig = px.bar(history, x="Month", y="Detections", text="Detections")
+        hist_fig.update_traces(marker_color=ORANGE, textposition="outside", cliponaxis=False)
+        plot(theme(hist_fig, 310, "Detection history used for this prediction"))
+
+    st.markdown("### Highest-scoring geographic cells")
+    table_cols = [
+        "lat_grid", "lon_grid", "probability_pct", "prediction",
+        "previous_1_month_detections", "previous_2_month_detections",
+        "previous_3_month_detections",
+    ]
+    if test_mode:
+        table_cols += ["actual_detection", "actual_detections"]
+    top_forecast = forecast.nlargest(20, "probability_detection")[table_cols].rename(
+        columns={"probability_pct": "Model score (%)"}
+    )
+    st.dataframe(top_forecast, width="stretch", hide_index=True)
+    st.download_button(
+        "Download displayed month predictions (CSV)",
+        forecast.drop(columns=["latitude", "longitude", "cell_label", "probability_pct"])
+        .to_csv(index=False).encode("utf-8"),
+        file_name=f"firewatch_predictions_{selected_year}_{selected_month:02d}.csv",
+        mime="text/csv",
+    )
+    with st.expander("Method, comparison, and limitations"):
+        st.markdown(
+            "**Model:** 100-tree Random Forest trained in Spark MLlib using grid latitude, "
+            "grid longitude, target month, and previous one, two and three months' detection counts. "
+            "**Temporal split:** Apr–Sep 2024 training, October validation, Nov–Dec testing. "
+            "**Baseline:** predict a detection when the previous month had at least one detection. "
+            "**Limitations:** one data year; retrospective evaluation only; no external-year validation. "
+            "An absence of satellite detections does not establish an absence of fires. "
+            "The model score is not a calibrated fire probability. "
+            "The January 2025 scenario extrapolates to an unseen target month and is not validated."
+        )
+        if metrics_path.is_file():
+            with metrics_path.open("r", encoding="utf-8") as handle:
+                st.json(json.load(handle))
 
 else:
     header("Data / Explorer", "Explore the processed analytics.", "Inspect aggregated datasets, filter rows, and export selected tables as CSV.")
@@ -298,7 +545,7 @@ else:
     frame = available[dataset]
     limit = st.slider("Rows to display", 10, 1000, 100, 10)
     st.metric("ROWS IN DATASET", f"{len(frame):,}")
-    st.dataframe(frame.head(limit), use_container_width=True, hide_index=True)
+    st.dataframe(frame.head(limit), width="stretch", hide_index=True)
     st.download_button("Download dataset as CSV", frame.to_csv(index=False).encode("utf-8"), file_name=dataset.lower().replace(" ", "_").replace("/", "_") + ".csv", mime="text/csv")
     with st.expander("Preview cleaned source detections (first 2,500 rows)"):
         if st.button("Load sample of cleaned detections"):
@@ -306,8 +553,8 @@ else:
             if sample.empty:
                 st.warning("Cleaned Parquet file was not found.")
             else:
-                st.dataframe(sample, use_container_width=True, hide_index=True)
+                st.dataframe(sample, width="stretch", hide_index=True)
                 st.caption("Preview only; not a random sample and not the full dataset.")
 
 st.divider()
-st.caption("FIREWATCH AI  ·  NASA FIRMS VIIRS S-NPP  ·  AUSTRALIA 2024  ·  APACHE SPARK + SPARK MLLIB  ·  HISTORICAL ANALYTICS")
+st.caption("FIREWATCH AI  ·  NASA FIRMS VIIRS S-NPP  ·  AUSTRALIA 2024  ·  APACHE SPARK + SPARK MLLIB  ·  HISTORICAL ANALYTICS + EXPERIMENTAL FORECAST")
